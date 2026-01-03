@@ -1,6 +1,10 @@
+import os
 import json
 import torch
 from datasets import Dataset
+
+# Use HuggingFace mirror for faster downloads (useful in regions with slow HF access)
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
