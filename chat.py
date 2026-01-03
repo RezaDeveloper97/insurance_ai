@@ -41,12 +41,9 @@ class ThinkingAnimation:
 
 
 # ---------- Device ----------
-if torch.backends.mps.is_available():
-    device = torch.device("mps")
-    print("✓ Using Apple MPS")
-else:
-    device = torch.device("cpu")
-    print("✓ Using CPU")
+# Force CPU - MPS has issues with this model
+device = torch.device("cpu")
+print("✓ Using CPU (MPS disabled for stability)")
 
 # ---------- Load Model ----------
 print("Loading model...")
