@@ -11,9 +11,24 @@ from transformers import (
 from peft import LoraConfig, get_peft_model, TaskType
 
 
-MODEL_NAME = "mistralai/Mistral-7B-Instruct-v0.2"
+# ---------- Config ----------
+# Options for 8GB RAM:
+#   - "Qwen/Qwen2-1.5B-Instruct" (recommended, best quality)
+#   - "TinyLlama/TinyLlama-1.1B-Chat-v1.0" (smaller, faster)
+#   - "microsoft/phi-2" (good quality, 2.7B)
+
+MODEL_NAME = "Qwen/Qwen2-1.5B-Instruct"
 DATASET_PATH = "insurance_lora.json"
 OUTPUT_DIR = "insurance-lora-output"
+
+
+# ---------- Device setup for Apple Silicon ----------
+if torch.backends.mps.is_available():
+    device = torch.device("mps")
+    print("Using Apple MPS (Metal Performance Shaders)")
+else:
+    device = torch.device("cpu")
+    print("Using CPU")
 
 
 # ---------- Load dataset ----------
@@ -33,8 +48,9 @@ dataset = dataset.map(format_example)
 
 
 # ---------- Tokenizer ----------
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-tokenizer.pad_token = tokenizer.eos_token
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
 
 def tokenize(example):
     return tokenizer(
@@ -50,15 +66,17 @@ tokenized_dataset = dataset.map(tokenize, remove_columns=dataset.column_names)
 # ---------- Model ----------
 model = AutoModelForCausalLM.from_pretrained(
     MODEL_NAME,
-    device_map="auto",
-    torch_dtype=torch.float16
+    torch_dtype=torch.float32,  # MPS works better with float32
+    trust_remote_code=True
 )
+model = model.to(device)
+
 
 # ---------- LoRA config ----------
 lora_config = LoraConfig(
     r=8,
     lora_alpha=16,
-    target_modules=["q_proj", "v_proj"],
+    target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
     lora_dropout=0.05,
     bias="none",
     task_type=TaskType.CAUSAL_LM
@@ -75,10 +93,12 @@ training_args = TrainingArguments(
     gradient_accumulation_steps=4,
     num_train_epochs=3,
     learning_rate=2e-4,
-    fp16=True,
     logging_steps=1,
     save_strategy="epoch",
-    report_to="none"
+    report_to="none",
+    use_mps_device=True if device.type == "mps" else False,
+    fp16=False,  # MPS doesn't support fp16 training well
+    optim="adamw_torch"
 )
 
 data_collator = DataCollatorForLanguageModeling(
