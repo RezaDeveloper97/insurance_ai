@@ -5,6 +5,8 @@ from datasets import Dataset
 
 # Use HuggingFace mirror for faster downloads (useful in regions with slow HF access)
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -15,15 +17,11 @@ from transformers import (
 from peft import LoraConfig, get_peft_model, TaskType
 
 
-# ---------- Config ----------
-# Options for 8GB RAM:
-#   - "Qwen/Qwen2-1.5B-Instruct" (recommended, best quality)
-#   - "TinyLlama/TinyLlama-1.1B-Chat-v1.0" (smaller, faster)
-#   - "microsoft/phi-2" (good quality, 2.7B)
-
-MODEL_NAME = "Qwen/Qwen2-1.5B-Instruct"
+# ---------- Config for 8GB RAM ----------
+MODEL_NAME = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 DATASET_PATH = "insurance_lora.json"
 OUTPUT_DIR = "insurance-lora-output"
+MAX_LENGTH = 256  # Reduced for memory
 
 
 # ---------- Device setup for Apple Silicon ----------
@@ -49,10 +47,11 @@ def format_example(example):
 
 dataset = Dataset.from_list(raw_data)
 dataset = dataset.map(format_example)
+print(f"Dataset size: {len(dataset)} examples")
 
 
 # ---------- Tokenizer ----------
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
 
@@ -61,26 +60,31 @@ def tokenize(example):
         example["text"],
         truncation=True,
         padding="max_length",
-        max_length=512
+        max_length=MAX_LENGTH
     )
 
 tokenized_dataset = dataset.map(tokenize, remove_columns=dataset.column_names)
 
 
 # ---------- Model ----------
+print("Loading model...")
 model = AutoModelForCausalLM.from_pretrained(
     MODEL_NAME,
-    torch_dtype=torch.float32,  # MPS works better with float32
-    trust_remote_code=True
+    torch_dtype=torch.float32
 )
+
+# Enable gradient checkpointing to save memory
+model.gradient_checkpointing_enable()
+
 model = model.to(device)
+print("Model loaded!")
 
 
-# ---------- LoRA config ----------
+# ---------- LoRA config (minimal for 8GB RAM) ----------
 lora_config = LoraConfig(
-    r=8,
-    lora_alpha=16,
-    target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
+    r=4,  # Reduced from 8
+    lora_alpha=8,
+    target_modules=["q_proj", "v_proj"],  # Only 2 modules
     lora_dropout=0.05,
     bias="none",
     task_type=TaskType.CAUSAL_LM
@@ -100,9 +104,10 @@ training_args = TrainingArguments(
     logging_steps=1,
     save_strategy="epoch",
     report_to="none",
-    use_mps_device=True if device.type == "mps" else False,
-    fp16=False,  # MPS doesn't support fp16 training well
-    optim="adamw_torch"
+    fp16=False,
+    optim="adamw_torch",
+    dataloader_pin_memory=False,  # Disable for MPS
+    gradient_checkpointing=True
 )
 
 data_collator = DataCollatorForLanguageModeling(
@@ -117,9 +122,10 @@ trainer = Trainer(
     data_collator=data_collator
 )
 
+print("Starting training...")
 trainer.train()
 
 model.save_pretrained(OUTPUT_DIR)
 tokenizer.save_pretrained(OUTPUT_DIR)
 
-print("LoRA training finished.")
+print("LoRA training finished! Output saved to:", OUTPUT_DIR)
