@@ -5,6 +5,8 @@ env/
 
 # Model outputs
 insurance-lora-output/
+insurance-model-merged/
+*.gguf
 
 # Python
 __pycache__/
